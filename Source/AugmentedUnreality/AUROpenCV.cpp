@@ -1,5 +1,5 @@
 /*
-Copyright 2016 Krzysztof Lis
+Copyright 2016-2017 Krzysztof Lis
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -44,7 +44,7 @@ FString FindGstreamerPluginDir()
 	FString platform =
 #if PLATFORM_WINDOWS
 		"Win64"
-#elif PLATFOM_LINUX
+#elif PLATFORM_LINUX
 		"Linux"
 #else
 		"unknown"

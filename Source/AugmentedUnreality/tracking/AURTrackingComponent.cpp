@@ -1,5 +1,5 @@
 /*
-Copyright 2016 Krzysztof Lis
+Copyright 2016-2017 Krzysztof Lis
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -16,13 +16,13 @@ limitations under the License.
 #include "AugmentedUnreality.h"
 #include "AURTrackingComponent.h"
 #include "AURDriver.h"
-#include "AURMarkerBoardDefinitionBase.h"
+#include "AURFiducialPattern.h"
 
 void UAURTrackingComponent::BeginPlay()
 {
-	UE_LOG(LogAUR, Warning, TEXT("TRackignCOmp:BEGIN"))
+	UE_LOG(LogAUR, Log, TEXT("AURTrackingComponent::BeginPlay"))
 
-	AAURMarkerBoardDefinitionBase* board = Cast<AAURMarkerBoardDefinitionBase>(GetChildActor());
+	AAURFiducialPattern* board = Cast<AAURFiducialPattern>(GetChildActor());
 
 	if (!board)
 	{

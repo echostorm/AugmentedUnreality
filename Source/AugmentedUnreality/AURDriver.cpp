@@ -1,5 +1,5 @@
 /*
-Copyright 2016 Krzysztof Lis
+Copyright 2016-2017 Krzysztof Lis
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -16,17 +16,17 @@ limitations under the License.
 
 #include "AugmentedUnreality.h"
 #include "AURDriver.h"
-//#include "AURSmoothingFilter.h"
+#include "tracking/AURFiducialPattern.h"
 
 UAURDriver* UAURDriver::CurrentDriver = nullptr;
 UAURDriver::FAURDriverInstanceChange UAURDriver::OnDriverInstanceChange;
 TArray<UAURDriver::BoardRegistration> UAURDriver::RegisteredBoards;
 
-
 UAURDriver::UAURDriver()
 	: bPerformOrientationTracking(true)
-	, FrameResolution(1, 1)
+	, DiagnosticLevel(EAURDiagnosticInfoLevel::AURD_Silent)
 	, bActive(false)
+	, FrameResolution(1, 1)
 	, bCalibrationInProgress(false)
 {
 }
@@ -34,10 +34,26 @@ UAURDriver::UAURDriver()
 void UAURDriver::Initialize(AActor* parent_actor)
 {
 	SetWorld(parent_actor->GetWorld());
-
 	RegisterDriver(this);
-
 	bActive = true;
+
+	// Create video sources
+	for (auto const& vid_src_class : AvailableVideoSources)
+	{
+		if (vid_src_class)
+		{
+			UAURVideoSource* vid_src = NewObject<UAURVideoSource>(this, vid_src_class);
+			VideoSourceInstances.Add(vid_src);
+
+			// Get the list of configurations offered by this source
+			vid_src->DiscoverConfigurations();
+			VideoConfigurations.Append(vid_src->Configurations);
+		}
+		else
+		{
+			UE_LOG(LogAUR, Error, TEXT("UAURDriver::Initialize Null entry in AvailableVideoSources"));
+		}
+	}
 }
 
 void UAURDriver::Tick()
@@ -124,19 +140,65 @@ void UAURDriver::Shutdown()
 	UnregisterDriver(this);
 }
 
-bool UAURDriver::OpenDefaultVideoSource()
+void UAURDriver::OpenVideoSource(FAURVideoConfiguration const& VideoConfiguration)
 {
-	UE_LOG(LogAUR, Error, TEXT("UAURDriver::OpenDefaultVideoSource: Not implemented"))
+	// Save the index to open same source on next run
+	DefaultVideoSourceName = VideoConfiguration.Identifier;
+	SaveConfig();
+}
+
+bool UAURDriver::OpenVideoSourceByName(FString const& VideoConfigurationName)
+{
+	for (auto const& cfg : VideoConfigurations)
+	{
+		if (cfg.Identifier == VideoConfigurationName)
+		{
+			OpenVideoSource(cfg);
+			return true;
+		}
+	}
+
+	UE_LOG(LogAUR, Warning, TEXT("UAURDriver::OpenVideoSourceByName: Missing configuration '%s'"), *VideoConfigurationName);
 	return false;
 }
 
-bool UAURDriver::RegisterBoard(AAURMarkerBoardDefinitionBase * board_actor, bool use_as_viewpoint_origin)
+bool UAURDriver::OpenVideoSourceDefault()
+{
+	// try opening the last used video source
+	if (OpenVideoSourceByName(DefaultVideoSourceName))
+	{
+		return true;
+	}
+	// if its the first time, open the one with highest priority
+	else if(VideoConfigurations.Num() > 0)
+	{
+		FAURVideoConfiguration* best_cfg = nullptr;
+
+		for (auto& cfg : VideoConfigurations)
+		{
+			if ((!best_cfg) || cfg.Priority > best_cfg->Priority)
+			{
+				best_cfg = &cfg;
+			}
+		}
+
+		if (best_cfg)
+		{
+			OpenVideoSource(*best_cfg);
+			return true;
+		}
+	}
+
+	return false;
+}
+
+bool UAURDriver::RegisterBoard(AAURFiducialPattern * board_actor, bool use_as_viewpoint_origin)
 {
 	UE_LOG(LogAUR, Error, TEXT("UAURDriver::RegisterBoard: Not implemented"))
 	return false;
 }
 
-void UAURDriver::UnregisterBoard(AAURMarkerBoardDefinitionBase * board_actor)
+void UAURDriver::UnregisterBoard(AAURFiducialPattern * board_actor)
 {
 	UE_LOG(LogAUR, Error, TEXT("UAURDriver::UnregisterBoard: Not implemented"))
 }
@@ -188,6 +250,17 @@ FAURVideoFrame * UAURDriver::GetFrame()
 bool UAURDriver::IsNewFrameAvailable() const
 {
 	return false;
+}
+
+void UAURDriver::SetDiagnosticInfoLevel(EAURDiagnosticInfoLevel NewLevel)
+{
+	DiagnosticLevel = NewLevel;
+}
+
+void UAURDriver::ToggleDiagnosticInfoLevel()
+{
+	const uint8 next = ((uint8)GetDiagnosticInfoLevel() + 1) % ((uint8)EAURDiagnosticInfoLevel::AURD_Advanced + 1);
+	SetDiagnosticInfoLevel((EAURDiagnosticInfoLevel)next);
 }
 
 FString UAURDriver::GetDiagnosticText() const
@@ -243,7 +316,7 @@ UAURDriver * UAURDriver::GetCurrentDriver()
 	return CurrentDriver;
 }
 
-void UAURDriver::RegisterBoardForTracking(AAURMarkerBoardDefinitionBase * board_actor, bool use_as_viewpoint_origin)
+void UAURDriver::RegisterBoardForTracking(AAURFiducialPattern * board_actor, bool use_as_viewpoint_origin)
 {
 	RegisteredBoards.AddUnique(BoardRegistration(board_actor, use_as_viewpoint_origin));
 
@@ -253,7 +326,7 @@ void UAURDriver::RegisterBoardForTracking(AAURMarkerBoardDefinitionBase * board_
 	}
 }
 
-void UAURDriver::UnregisterBoardForTracking(AAURMarkerBoardDefinitionBase * board_actor)
+void UAURDriver::UnregisterBoardForTracking(AAURFiducialPattern * board_actor)
 {
 	RegisteredBoards.RemoveAll([&](BoardRegistration const & entry) {
 		return entry.Board == board_actor;
@@ -287,9 +360,11 @@ void UAURDriver::UnbindOnDriverInstanceChange(UObject * SlotOwner)
 
 void UAURDriver::RegisterDriver(UAURDriver* driver)
 {
+	UE_LOG(LogAUR, Log, TEXT("UAURDriver::RegisterDriver: Register driver: %s"), *driver->GetFullName())
+
 	if (CurrentDriver)
 	{
-		UE_LOG(LogAUR, Warning, TEXT("UAURDriver::Initialize: CurrentDriver is not null, replacing"))
+		UE_LOG(LogAUR, Warning, TEXT("UAURDriver::RegisterDriver: CurrentDriver is not null, replacing"))
 	}
 
 	CurrentDriver = driver;
@@ -304,9 +379,17 @@ void UAURDriver::RegisterDriver(UAURDriver* driver)
 
 void UAURDriver::UnregisterDriver(UAURDriver* driver)
 {
+	UE_LOG(LogAUR, Log, TEXT("UAURDriver::UnregisterDrive: Remove driver: %s"), *driver->GetFullName());
+
 	if (CurrentDriver == driver)
 	{
 		CurrentDriver = nullptr;
 		OnDriverInstanceChange.Broadcast(CurrentDriver);
 	}
+}
+
+FTransform UAURDriver::GetCurrentViewportTransform() const
+{
+	UE_LOG(LogAUR, Warning, TEXT("UAURDriver::GetCurrentViewportTransform(): Not implemented, returning identity"))
+	return FTransform::Identity;
 }

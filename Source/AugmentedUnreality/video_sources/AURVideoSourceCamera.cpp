@@ -1,5 +1,5 @@
 /*
-Copyright 2016 Krzysztof Lis
+Copyright 2016-2017 Krzysztof Lis
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -19,47 +19,76 @@ limitations under the License.
 
 UAURVideoSourceCamera::UAURVideoSourceCamera()
 	: CameraIndex(0)
-	, DesiredResolution(0, 0)
-	, Autofocus(true)
+	, PreferredResolutionX(720)
+	, OfferedResolutions{FIntPoint(1920, 1080), FIntPoint(1280, 720), FIntPoint(640, 480), FIntPoint(480, 360)}
 {
+}
+
+FString UAURVideoSourceCamera::GetIdentifier() const
+{
+	return FString::Printf(TEXT("DesktopCamera_%d"), CameraIndex);
 }
 
 FText UAURVideoSourceCamera::GetSourceName() const
 {
-	if(!SourceName.IsEmpty())
-	{
-		return SourceName;
-	}
-	else
-	{
-		return FText::FromString(FString::Printf(TEXT("Camera %d"), CameraIndex));
-	}
+	return FText::Format(NSLOCTEXT("AUR", "VideoSourceDesktopCamera", "Camera {0}"), FText::AsNumber(CameraIndex));
 }
 
-bool UAURVideoSourceCamera::Connect()
+void UAURVideoSourceCamera::DiscoverConfigurations()
 {
-	Capture.open(CameraIndex);
+	Configurations.Empty();
 
-	if (Capture.isOpened())
+	//= cv::VideoCapture does not work on Android
+#if PLATFORM_WINDOWS || PLATFORM_LINUX
+	for (auto const& resolution : OfferedResolutions)
 	{
-		UE_LOG(LogAUR, Log, TEXT("UAURVideoSourceCamera::Connect: Connected to Camera %d"), CameraIndex)
+		FAURVideoConfiguration cfg(this, ResolutionToString(resolution));
+		cfg.Resolution = resolution;
+		cfg.SetPriorityFromDesiredResolution(PreferredResolutionX);
 
-		// Suggest resolution
-		if(DesiredResolution.GetMin() > 0)
+		Configurations.Add(cfg);
+	}
+#endif
+}
+
+bool UAURVideoSourceCamera::Connect(FAURVideoConfiguration const& configuration)
+{
+	Super::Connect(configuration);
+
+#if !PLATFORM_ANDROID
+	try
+	{
+#endif
+		Capture.open(CameraIndex);
+
+		if (Capture.isOpened())
 		{
-			Capture.set(cv::CAP_PROP_FRAME_WIDTH, DesiredResolution.X);
-			Capture.set(cv::CAP_PROP_FRAME_HEIGHT, DesiredResolution.Y);
+			UE_LOG(LogAUR, Log, TEXT("UAURVideoSourceCamera::Connect: Connected to Camera %d"), CameraIndex)
+
+			// Suggest resolution
+			if(configuration.Resolution.GetMin() > 0)
+			{
+				Capture.set(cv::CAP_PROP_FRAME_WIDTH, configuration.Resolution.X);
+				Capture.set(cv::CAP_PROP_FRAME_HEIGHT, configuration.Resolution.Y);
+			}
+
+			// Disable autofocus, because we assume a constant focal length
+			Capture.set(cv::CAP_PROP_AUTOFOCUS,  0);
+
+			LoadCalibration();
 		}
-
-		// Suggest autofocus
-		Capture.set(cv::CAP_PROP_AUTOFOCUS, Autofocus ? 1 : 0);
-
-		LoadCalibration();
+		else
+		{
+			UE_LOG(LogAUR, Error, TEXT("UAURVideoSourceCamera::Connect: Failed to open Camera %d"), CameraIndex)
+		}
+#if !PLATFORM_ANDROID
 	}
-	else
+	catch (std::exception& exc)
 	{
-		UE_LOG(LogAUR, Error, TEXT("UAURVideoSourceCamera::Connect: Failed to open Camera %d"), CameraIndex)
+		UE_LOG(LogAUR, Error, TEXT("Exception in UAURVideoSourceCamera::Connect:\n	%s\n"), UTF8_TO_TCHAR(exc.what()))
+		return false;
 	}
-	
+#endif
+
 	return Capture.isOpened();
 }

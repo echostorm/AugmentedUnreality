@@ -1,0 +1,268 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+	Copyright 2016-2017 Krzysztof Lis (adynathos.net)
+
+	Licensed under the Apache License, Version 2.0 (the "License");
+	you may not use this file except in compliance with the License.
+	You may obtain a copy of the License at
+
+	http://www.apache.org/licenses/LICENSE-2.0
+
+	Unless required by applicable law or agreed to in writing, software
+	distributed under the License is distributed on an "AS IS" BASIS,
+	WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+	See the License for the specific language governing permissions and
+	limitations under the License.
+-->
+<root xmlns:android="http://schemas.android.com/apk/res/android">
+	<init>
+		<log text="AugmentedUnrealityAndroid_UPL"/>
+	</init>
+
+	<!-- Add CAMERA permissions -->
+	<androidManifestUpdates>
+		<addPermission android:name="android.permission.CAMERA"/>
+		<addFeature android:name="android.hardware.camera"/>
+	</androidManifestUpdates>
+
+	<gameActivityImportAdditions>
+		<insert>
+			import android.util.Log;
+			import android.widget.Toast;
+			import android.hardware.Camera;
+			import android.hardware.Camera.CameraInfo;
+			import android.hardware.Camera.Parameters;
+			import android.hardware.Camera.PreviewCallback;
+			import android.graphics.SurfaceTexture;
+			import android.graphics.ImageFormat;
+			import android.graphics.PixelFormat;
+			import java.util.List; 
+			import java.io.IOException;
+		</insert>
+	</gameActivityImportAdditions>
+
+		<gameActivityClassAdditions>
+		<insert>
+
+private Camera AUR_Camera;
+private boolean AUR_ShouldReconnect = false;
+private SurfaceTexture AUR_CameraTexture;
+private int AUR_FrameWidth = 1280;
+private int AUR_FrameHeight = 720;
+
+public void AUR_Message(final String msg)
+{
+	try
+	{
+		runOnUiThread(new Runnable()
+		{
+			public void run()
+			{
+				Toast.makeText(getApplicationContext(), msg, Toast.LENGTH_LONG).show();
+			}
+		});
+	}
+	catch (Exception e)
+	{
+		android.util.Log.e("AUR", "Toast failed with exception " + e.getMessage());
+	}
+
+	AURNotify();
+}
+
+public int AUR_GetFrameWidth()
+{
+	return AUR_FrameWidth;
+}
+
+public int AUR_GetFrameHeight()
+{
+	return AUR_FrameHeight;
+}
+
+public boolean AUR_IsCameraConnected()
+{
+	return AUR_Camera != null;
+}
+
+public int[] AUR_GetAvailableResolutions()
+{
+	Log.debug("LogAUR:Android Get Available Resolutions");
+
+	if(AUR_Camera == null)
+	{
+		try {
+			AUR_Camera = Camera.open();
+		} catch (RuntimeException exc) {
+			Log.error("LogAUR: Exception in Camera.open: " + exc.getMessage());
+			return new int[0];
+		} 
+	}
+
+	Parameters camera_params = AUR_Camera.getParameters();
+
+	List &lt; Camera.Size &gt; sizes = camera_params.getSupportedVideoSizes(); 
+	//a list of Size object if camera has separate preview and video output; otherwise, null is returned.
+	if(sizes == null)
+	{
+		sizes = camera_params.getSupportedPreviewSizes();
+	}
+
+	Log.debug("LogAUR:Android resolution array " + sizes.size());
+
+
+	int[] out_size_array = new int[2*sizes.size()];
+	for(int idx=0; idx &lt; sizes.size(); idx++)
+	{
+		Camera.Size s = sizes.get(idx);
+		out_size_array[idx*2] = s.width;
+		out_size_array[idx*2+1] = s.height;
+	}
+
+	return out_size_array;
+}
+
+public float AUR_GetHorizontalFOV()
+{
+	if(AUR_Camera != null)
+	{
+		return AUR_Camera.getParameters().getHorizontalViewAngle();
+	}
+	else
+	{
+		return 0;
+	}
+}
+
+public boolean AUR_CameraStartCapture(int suggested_width, int suggested_height)
+{
+	Log.debug("LogAUR: CameraStartCapture");
+
+	if(AUR_Camera == null)
+	{
+		try
+		{
+			AUR_Camera = Camera.open();
+		} catch (RuntimeException exc) {
+			Log.error("LogAUR: Exception in Camera.open: " + exc.getMessage());
+			return false;
+		} 
+	}
+	
+	// Set properties of video stream:
+	Parameters camera_params = AUR_Camera.getParameters();
+
+	// - YUV420sp image format
+	camera_params.setPreviewFormat(ImageFormat.NV21);
+
+	// - Disable autofocus, because we assume a constant focal length
+		List &lt; String &gt; focus_modes = camera_params.getSupportedFocusModes();
+		
+		if (focus_modes.contains(Parameters.FOCUS_MODE_INFINITY))
+		{
+			camera_params.setFocusMode(Parameters.FOCUS_MODE_INFINITY);
+		}
+		else if(focus_modes.contains(Parameters.FOCUS_MODE_FIXED))
+		{
+			camera_params.setFocusMode(Parameters.FOCUS_MODE_FIXED);
+		} 
+	// -------
+
+	// - Requested resolution
+	if(suggested_width &gt; 0 &amp;&amp; suggested_height &gt; 0)
+	{
+		camera_params.setPreviewSize(suggested_width, suggested_height);
+	}
+	else
+	{		
+		Camera.Size cam_size = camera_params.getPreferredPreviewSizeForVideo();
+		camera_params.setPreviewSize(cam_size.width, cam_size.height);
+	}
+	// -------
+	
+	// - commit video parameters
+	try {
+		AUR_Camera.setParameters(camera_params);
+	} catch (RuntimeException exc) {
+		Log.error("LogAUR: Exception in AUR_Camera.setParameters: " + exc.getMessage());
+		return false;
+	}
+	// -------
+
+	// Read the resulting frame size
+	AUR_FrameWidth = AUR_Camera.getParameters().getPreviewSize().width;
+	AUR_FrameHeight = AUR_Camera.getParameters().getPreviewSize().height;
+
+	// Create texture
+	AUR_CameraTexture = new SurfaceTexture(10);
+	AUR_CameraTexture.setDefaultBufferSize(AUR_FrameWidth, AUR_FrameHeight);
+	try {
+		AUR_Camera.setPreviewTexture(AUR_CameraTexture);
+	} catch (IOException exc) {
+		Log.error("LogAUR: Exception in AUR_Camera.setPreviewTexture: " + exc.getMessage());
+		return false;
+	} 
+	
+	// On received frame: send it to C++ program
+	AUR_Camera.setPreviewCallback(new PreviewCallback() {
+		@Override
+		public void onPreviewFrame(byte[] data, Camera camera) {
+			AURReceiveFrame(data);
+		}
+	});
+	// TODO setErrorCallback
+
+	AUR_Camera.startPreview();
+
+	// When application is resumed, reconnect
+	AUR_ShouldReconnect = true;
+
+	return true;
+}
+
+public void AUR_CameraStopCapture()
+{
+	AUR_ShouldReconnect = false;
+	AUR_ReleaseCamera();
+}
+
+private void AUR_ReleaseCamera()
+{
+	if (AUR_Camera != null) 
+	{
+		AUR_Camera.stopPreview();
+		AUR_Camera.release();
+		AUR_Camera = null;
+	}
+}
+
+public native void AURNotify();
+public native void AURReceiveFrame(byte[] data);
+		</insert>
+	</gameActivityClassAdditions>
+
+	<gameActivityOnPauseAdditions>
+		<insert>
+			if(AUR_Camera != null)
+			{
+				AUR_ReleaseCamera();
+			}
+		</insert>
+	</gameActivityOnPauseAdditions>
+	<!-- onStop is always called after onPause, when the program stops being visible -->
+
+	<gameActivityOnResumeAdditions>
+		<insert>
+			if(AUR_ShouldReconnect)
+			{
+				AUR_CameraStartCapture(AUR_FrameWidth, AUR_FrameHeight);
+			}
+		</insert>
+	</gameActivityOnResumeAdditions>
+
+	<gameActivityOnDestroyAdditions>
+		<insert>
+			AUR_CameraStopCapture();
+		</insert>
+	</gameActivityOnDestroyAdditions>
+</root>

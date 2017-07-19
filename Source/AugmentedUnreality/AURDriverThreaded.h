@@ -1,5 +1,5 @@
 /*
-Copyright 2016 Krzysztof Lis
+Copyright 2016-2017 Krzysztof Lis
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -50,7 +50,7 @@ protected:
 
 	FAURVideoFrame FrameInstances[3];
 
-	FCriticalSection TrackerLock; // mutex which needs to be obtained before using marker tracker
+	//FCriticalSection TrackerLock; // mutex which needs to be obtained before using marker tracker
 	
 	TUniquePtr<FRunnable> Worker;
 	TUniquePtr<FRunnableThread> WorkerThread;

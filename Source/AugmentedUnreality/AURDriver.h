@@ -1,5 +1,5 @@
 /*
-Copyright 2016 Krzysztof Lis
+Copyright 2016-2017 Krzysztof Lis
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -16,9 +16,18 @@ limitations under the License.
 
 #pragma once
 
-#include "Object.h"
-//class UAURSmoothingFilter;
+#include "video_sources/AURVideoSource.h"
 #include "AURDriver.generated.h"
+
+class AAURFiducialPattern;
+
+UENUM(BlueprintType)
+enum class EAURDiagnosticInfoLevel : uint8
+{
+	AURD_Silent = 0 	UMETA(DisplayName = "Diagnostic: Silent"),
+	AURD_Basic = 1		UMETA(DisplayName = "Diagnostic: Basic"),
+	AURD_Advanced = 2	UMETA(DisplayName = "Diagnostic: Advanced")
+};
 
 USTRUCT(BlueprintType)
 struct FAURVideoFrame
@@ -65,7 +74,7 @@ struct FAURVideoFrame
 /**
  * Represents a way of connecting to a camera.
  */
-UCLASS(Blueprintable, BlueprintType, Abstract)
+UCLASS(Blueprintable, BlueprintType, Abstract, Config = Game)
 class UAURDriver : public UObject
 {
 	GENERATED_BODY()
@@ -75,10 +84,7 @@ public:
 	DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FAURDriverCalibrationStatusChange, UAURDriver*, Driver);
 	DECLARE_DYNAMIC_DELEGATE_OneParam(FAURDriverInstanceChangeSingle, UAURDriver*, Driver);
 	DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FAURDriverInstanceChange, UAURDriver*, Driver);
-
-	/** True if it should track markers and calculate camera position+rotation */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = AugmentedReality)
-	uint32 bPerformOrientationTracking : 1;
+	DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FAURDriverViewpointTransformUpdate, UAURDriver*, Driver, FTransform, ViewportTransform);
 
 	/** Called when the resolution / FOV changes / connection status changes */
 	UPROPERTY(BlueprintAssignable)
@@ -87,6 +93,37 @@ public:
 	/** Called when calibration starts or ends */
 	UPROPERTY(BlueprintAssignable)
 	FAURDriverCalibrationStatusChange OnCalibrationStatusChange;
+
+	/** Called when a new viewpoint (camera) position is measured by the tracker */
+	UPROPERTY(BlueprintAssignable)
+	FAURDriverViewpointTransformUpdate OnViewpointTransformUpdate;
+
+	/** True if it should track markers and calculate camera position+rotation */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = AugmentedReality)
+	uint32 bPerformOrientationTracking : 1;
+
+	// Automatically creates those video sources on Initialize
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = AugmentedReality)
+	TArray< TSubclassOf<UAURVideoSource> > AvailableVideoSources;
+
+	// Automatically creates those video sources on Initialize
+	UPROPERTY(Transient, BlueprintReadOnly, Category = AugmentedReality)
+	TArray<FAURVideoConfiguration> VideoConfigurations;
+
+	// Switch to a new video source configuration
+	// This does not intantly change the VideoSource variable - wait for the other
+	// thread to close the previous one and open new one.
+	UFUNCTION(BlueprintCallable, Category = AugmentedReality)
+	virtual void OpenVideoSource(FAURVideoConfiguration const& VideoConfiguration);
+
+	// Switch to a new video source configuration found by identifier string
+	// Returns true if a video configuration with that name was found.
+	UFUNCTION(BlueprintCallable, Category = AugmentedReality)
+	bool OpenVideoSourceByName(FString const& VideoConfigurationName);
+
+	// Switch to the last used video source configuration
+	UFUNCTION(BlueprintCallable, Category = AugmentedReality)
+	bool OpenVideoSourceDefault();
 
 	/** Called when a new viewpoint (camera) position is measured by the tracker */
 	//UPROPERTY(BlueprintAssignable)
@@ -121,9 +158,6 @@ public:
 	 */
 	UFUNCTION(BlueprintCallable, Category = AugmentedReality)
 	virtual void Shutdown();
-
-	UFUNCTION(BlueprintCallable, Category = AugmentedReality)
-	virtual bool OpenDefaultVideoSource();
 
 	UFUNCTION(BlueprintCallable, Category = AugmentedReality)
 	UTexture2D* GetOutputTexture() const
@@ -174,6 +208,9 @@ public:
 		field_of_view = this->GetFieldOfView();
 	}
 
+	UFUNCTION(BlueprintCallable, Category = AugmentedReality)
+	virtual FTransform GetCurrentViewportTransform() const;
+
 	/**
 	 * Returns a pointer to FAURVideoFrame containing the current camera frame.
 	 * Do not delete the pointer.
@@ -191,12 +228,24 @@ public:
 	virtual bool IsNewFrameAvailable() const;
 
 	UFUNCTION(BlueprintCallable, Category = AugmentedReality)
+	EAURDiagnosticInfoLevel GetDiagnosticInfoLevel() const
+	{
+		return DiagnosticLevel;
+	}
+
+	UFUNCTION(BlueprintCallable, Category = AugmentedReality)
+	virtual void SetDiagnosticInfoLevel(EAURDiagnosticInfoLevel NewLevel);
+
+	UFUNCTION(BlueprintCallable, Category = AugmentedReality)
+	void ToggleDiagnosticInfoLevel();
+
+	UFUNCTION(BlueprintCallable, Category = AugmentedReality)
 	virtual FString GetDiagnosticText() const;
 
 	// Start tracking a board - called by the static board list mechanism (RegisterBoardForTracking)
-	virtual bool RegisterBoard(AAURMarkerBoardDefinitionBase* board_actor, bool use_as_viewpoint_origin = false);
+	virtual bool RegisterBoard(AAURFiducialPattern* board_actor, bool use_as_viewpoint_origin = false);
 
-	virtual void UnregisterBoard(AAURMarkerBoardDefinitionBase* board_actor);
+	virtual void UnregisterBoard(AAURFiducialPattern* board_actor);
 
 	UFUNCTION(BlueprintCallable, Category = AugmentedReality)
 	static UAURDriver* GetCurrentDriver();
@@ -213,10 +262,10 @@ public:
 		it will read the list and track the board.
 	**/
 	UFUNCTION(BlueprintCallable, Category = AugmentedReality)
-	static void RegisterBoardForTracking(AAURMarkerBoardDefinitionBase* board_actor, bool use_as_viewpoint_origin = false);
+	static void RegisterBoardForTracking(AAURFiducialPattern* board_actor, bool use_as_viewpoint_origin = false);
 
 	UFUNCTION(BlueprintCallable, Category = AugmentedReality)
-	static void UnregisterBoardForTracking(AAURMarkerBoardDefinitionBase* board_actor);
+	static void UnregisterBoardForTracking(AAURFiducialPattern* board_actor);
 
 	/*
 	 * Add a callback to be notified about a new AURDriver instance being used
@@ -237,6 +286,20 @@ protected:
 	// The video is drawn on this dynamic texture
 	UPROPERTY(BlueprintReadOnly, Transient, Category = AugmentedReality)
 	UTexture2D* OutputTexture;
+
+	// How much diagnostic information should be displayed. High value may reduce performance.
+	UPROPERTY(EditAnywhere, Category = AugmentedReality)
+	EAURDiagnosticInfoLevel DiagnosticLevel;
+
+	// Automatically creates those video sources on Initialize
+	UPROPERTY(Transient)
+	TArray< UAURVideoSource* > VideoSourceInstances;
+
+	/*
+	Name of the last used video source, saved in config so that it is opened on next start
+	*/
+	UPROPERTY(Config)
+	FString DefaultVideoSourceName;
 
 	// Is the driver turned on
 	uint32 bActive : 1;
@@ -259,7 +322,7 @@ protected:
 	}
 
 private:
-	// The rendering scheduled by ENQUEUE_UNIQUE_RENDER_COMMAND_TWOPARAMETER 
+	// The rendering scheduled by ENQUEUE_UNIQUE_RENDER_COMMAND_TWOPARAMETER
 	// takes place in the rendering thread:
 	// https://docs.unrealengine.com/latest/INT/Programming/Rendering/ThreadedRendering/index.html
 	// so data has to be passed through a struct.
@@ -277,10 +340,10 @@ private:
 	// Global registry of boards to track
 	struct BoardRegistration
 	{
-		AAURMarkerBoardDefinitionBase* Board;
+		AAURFiducialPattern* Board;
 		bool ViewpointOrigin;
 
-		BoardRegistration(AAURMarkerBoardDefinitionBase* board_actor, bool use_as_viewpoint_origin = false)
+		BoardRegistration(AAURFiducialPattern* board_actor, bool use_as_viewpoint_origin = false)
 			: Board(board_actor)
 			, ViewpointOrigin(use_as_viewpoint_origin)
 		{}

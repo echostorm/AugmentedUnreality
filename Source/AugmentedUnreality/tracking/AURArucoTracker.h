@@ -1,5 +1,5 @@
 /*
-Copyright 2016 Krzysztof Lis
+Copyright 2016-2017 Krzysztof Lis
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -18,7 +18,8 @@ limitations under the License.
 
 #include "AUROpenCVCalibration.h"
 #include "AUROpenCV.h"
-#include "AURMarkerBoardDefinitionBase.h"
+#include "AURFiducialPattern.h"
+#include "AURDriver.h"
 
 #include "AURArucoTracker.generated.h"
 
@@ -34,17 +35,12 @@ struct FArucoTrackerSettings
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = AugmentedReality)
 	float TranslationScale;
 
-	// Whether the marker outlines should be displayed on the screen
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = AugmentedReality)
-	uint32 bDisplayDetectedMarkers : 1;
-
 	// Value in range (0, 1), the higher, the more smoothed
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = AugmentedReality)
 	float SmoothingStrength;
 
 	FArucoTrackerSettings()
 		: TranslationScale(1.0)
-		, bDisplayDetectedMarkers(false)
 		, SmoothingStrength(0.5)
 	{
 	}
@@ -62,24 +58,23 @@ public:
 		// Tracked boards are identified by the lowest ID of their markers (marker IDs are unique)
 		int32 Id;
 
+		AAURFiducialPattern* BoardActor;
+
+		cv::aur::TrackedPose* PoseHandle;
+
+		FTransform CurrentTransform;
 		//
 		bool UseAsViewpointOrigin;
 
-		TSharedPtr<FFreeFormBoardData> BoardData;
-
-		FTransform CurrentTransform;
-
-		std::vector<int> FoundMarkerIds;
-		std::vector< std::vector<cv::Point2f> > FoundMarkerCorners;
-
-		TrackedBoardInfo(TSharedPtr<FFreeFormBoardData> board_data)
-			: Id(board_data->GetMinMarkerId())
+		TrackedBoardInfo(AAURFiducialPattern* board_actor, cv::aur::TrackedPose* pose)
+			: Id(pose->getPoseId())
+			, BoardActor(board_actor)
+			, PoseHandle(pose)
+			, CurrentTransform(FTransform::Identity)
 			, UseAsViewpointOrigin(false)
-			, BoardData(board_data)
 		{
 		}
 	};
-
 
 	FAURArucoTracker();
 
@@ -95,69 +90,53 @@ public:
 	// Returns the position of the camera (but with Z axis pointing toward the markers)
 	FTransform const& GetViewpointTransform() const
 	{
-		return ViewpointTransform;
+		return ViewpointTransformCamera;
 	}
 
 	/*
 		Calculate camera's position/rotation relative to the markers
 		Returns true if any markers were detected
 	*/
-	bool DetectMarkers(cv::Mat& image);
+	bool DetectMarkers(cv::Mat_<cv::Vec3b>& image, bool draw_found_markers = false);
 
 	// Start tracking a board
-	bool RegisterBoard(AAURMarkerBoardDefinitionBase* board_actor, bool use_as_viewpoint_origin = false);
+	bool RegisterBoard(AAURFiducialPattern* board_actor, bool use_as_viewpoint_origin = false);
 
 	// Stop tracking a board
-	void UnregisterBoard(AAURMarkerBoardDefinitionBase* board_actor);
+	void UnregisterBoard(AAURFiducialPattern* board_actor);
 
 	/*
 		Tell the board actors about newly detected positions.
 		Should run in game thread.
 	*/
-	void PublishTransformUpdatesOnTick();
+	void PublishTransformUpdatesOnTick(UAURDriver* driver_instance);
+
+	void SetDiagnosticInfoLevel(EAURDiagnosticInfoLevel NewLevel);
+	void SetBoardVisibility(bool NewBoardVisibility);
 
 private:
 	FArucoTrackerSettings Settings;
+
+	cv::aur::FiducialTracker TrackerModule;
+
+	bool BoardVisibility;
+
+	FCriticalSection PoseLock;
 
 	// Marker information
 	// Collection of all boards to track
 	TMap<int, TUniquePtr<TrackedBoardInfo>> TrackedBoardsById;
 
-	TMap<int, TrackedBoardInfo*> TrackedBoardsByMarker;
-
 	// Set of boards for which a new position was measured
-	TSet<TrackedBoardInfo*> DetectedBoards;
-
-	TSet<int> DetectedBoardIds;
+	TArray<TrackedBoardInfo*> DetectedBoards;
+	bool ViewpointPoseDetectedOnLastTick;
 
 	FTransform ViewpointTransform;
-	//bool ViewpointTransformChanged;
+	FTransform ViewpointTransformCamera;
 
-	//TSharedPtr<FFreeFormBoardData> BoardData;
 	FOpenCVCameraProperties CameraProperties;
 
-	// Dictionary - set of markers to be detected (all boards must use markers from the same dictionary)
-	uint32_t DictionaryId;
-
-	/**
-	A full copy of the dictionary returned by cv::ArUco is stored here
-	so that we avoid the crash-inducing Ptr<Dictionary>
-	**/
-	cv::aruco::Dictionary ArucoDictionary;
-
-	void DetermineBoardPosition(TrackedBoardInfo* tracking_info);
-
 	void PublishTransformUpdate(TrackedBoardInfo* tracking_info);
-
-	void ConvertTransformToUnreal(cv::Vec3d const& opencv_translation, cv::Vec3d const& opencv_rotation, FTransform & out_transform, bool camera_viewpoint) const;
-
-	// OpenCV writes directoy to those vectors, so they need to be allocated/deleted outside AUR binary
-	CvWrapper< std::vector<int> > FoundMarkerIds;
-	// OpenCV writes directoy to those vectors, so they need to be allocated/deleted outside AUR binary
-	CvWrapper< std::vector< std::vector<cv::Point2f> > > FoundMarkerCorners;
-
-	// Creates a default aruco board and saves a copy to a file.
-	//void UpdateMarkerDefinition(FArucoGridBoardDefinition const & BoardDefinition);
 
 	/*
 	OpenCV's rotation is

@@ -1,5 +1,5 @@
 /*
-Copyright 2016 Krzysztof Lis
+Copyright 2016-2017 Krzysztof Lis
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -29,7 +29,7 @@ class UAURVideoSourceCvCapture : public UAURVideoSource
 public:
 	virtual bool IsConnected() const override;
 	virtual void Disconnect() override;
-	virtual bool GetNextFrame(cv::Mat & frame) override;
+	virtual bool GetNextFrame(cv::Mat_<cv::Vec3b>& frame) override;
 	virtual FIntPoint GetResolution() const override;
 	virtual float GetFrequency() const override;
 

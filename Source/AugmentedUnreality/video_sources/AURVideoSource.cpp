@@ -1,5 +1,5 @@
 /*
-Copyright 2016 Krzysztof Lis
+Copyright 2016-2017 Krzysztof Lis
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -19,19 +19,58 @@ limitations under the License.
 
 const FString UAURVideoSource::CalibrationDir = "AugmentedUnreality/Calibration";
 
+FAURVideoConfiguration::FAURVideoConfiguration()
+	: Identifier("INVALID")
+	, VideoSourceObject(nullptr)
+	, DisplayName(NSLOCTEXT("AUR", "InvalidVideoSourceConfiguration", "INVALID"))
+	, Priority(-1.0)
+{}
+
+FAURVideoConfiguration::FAURVideoConfiguration(UAURVideoSource* parent, FString const& variant)
+	: Identifier(parent->GetIdentifier() + "_" + variant)
+	, VideoSourceObject(parent)
+	, Priority(parent->PriorityMultiplier)
+{
+	if (variant.IsEmpty())
+	{
+		DisplayName = parent->GetSourceName();
+	}
+	else
+	{
+		DisplayName = FText::Format(NSLOCTEXT("AUR", "VideoConfigurationNameFmt", "{0}: {1}"), parent->GetSourceName(), FText::FromString(variant));
+	}
+}
+
+void FAURVideoConfiguration::SetPriorityFromDesiredResolution(int32 desired_resolution_x, int32 stdev)
+{
+	Priority = 1.0 + FMath::Exp(-(float)FMath::Abs(Resolution.X - desired_resolution_x) / stdev);
+	Priority *= VideoSourceObject->PriorityMultiplier;
+}
+
 UAURVideoSource::UAURVideoSource()
-	: bCalibrated(false)
+	: PriorityMultiplier(1.0)
+	, bCalibrated(false)
 {
 }
 
 FText UAURVideoSource::GetSourceName() const
 {
-	return FText::FromString("Not implemented");
+	return NSLOCTEXT("AUR", "VideoSourceBase", "INVALID");
 }
 
-bool UAURVideoSource::Connect()
+FString UAURVideoSource::GetIdentifier() const
 {
-	UE_LOG(LogAUR, Error, TEXT("UAURVideoSource::Connect: Not implemented"))
+	return "INVALID";
+}
+
+void UAURVideoSource::DiscoverConfigurations()
+{
+	Configurations.Empty();
+}
+
+bool UAURVideoSource::Connect(FAURVideoConfiguration const& configuration)
+{
+	CurrentConfiguration = configuration;
 	return false;
 }
 
@@ -44,7 +83,7 @@ void UAURVideoSource::Disconnect()
 {
 }
 
-bool UAURVideoSource::GetNextFrame(cv::Mat & frame)
+bool UAURVideoSource::GetNextFrame(cv::Mat_<cv::Vec3b>& frame)
 {
 	UE_LOG(LogAUR, Error, TEXT("UAURVideoSource::GetNextFrame: Not implemented"))
 	return false;
@@ -95,7 +134,7 @@ bool UAURVideoSource::LoadCalibration()
 		UE_LOG(LogAUR, Warning, TEXT("AURVideoSource::LoadCalibration: Is not connected, can not determine resolution"))
 	}
 
-	return false;
+	return this->bCalibrated;
 }
 
 void UAURVideoSource::SaveCalibration(FOpenCVCameraProperties const & NewCalibration)
@@ -103,6 +142,11 @@ void UAURVideoSource::SaveCalibration(FOpenCVCameraProperties const & NewCalibra
 	CameraProperties = NewCalibration;
 	bCalibrated = true;
 	CameraProperties.SaveToFile(GetCalibrationFileFullPath());
+}
+
+FString UAURVideoSource::ResolutionToString(FIntPoint const & resolution)
+{
+	return FString::Printf(TEXT("%dx%d"), resolution.X, resolution.Y);
 }
 
 FString UAURVideoSource::GetCalibrationFileFullPath() const

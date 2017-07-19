@@ -1,5 +1,5 @@
 /*
-Copyright 2016 Krzysztof Lis
+Copyright 2016-2017 Krzysztof Lis
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -26,24 +26,27 @@ UCLASS(Blueprintable, BlueprintType)
 class UAURVideoSourceCamera : public UAURVideoSourceCvCapture
 {
 	GENERATED_BODY()
-	
+
 public:
 	// Index (0-based) of the camera to use.
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = VideoSource)
 	int32 CameraIndex;
 
-	// The resolution that will be suggested to the camera
-	// (0, 0) means no suggestion will be made
+	// Resolutions near this will be given higher priority
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = VideoSource)
-	FIntPoint DesiredResolution;
+	int32 PreferredResolutionX;
 
-	// Tell the camera whether autofocus should be used
+	/*
+		Resolutions to be selectable in the program.
+		OpenCV does not give us a way to find camera resolutions, so we need to guess.
+	*/
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = VideoSource)
-	bool Autofocus;
+	TArray<FIntPoint> OfferedResolutions;
 
 	UAURVideoSourceCamera();
 
 	virtual FText GetSourceName() const override;
-	virtual bool Connect() override;
+	virtual FString GetIdentifier() const override;
+	virtual void DiscoverConfigurations() override;
+	virtual bool Connect(FAURVideoConfiguration const& configuration) override;
 };
-	

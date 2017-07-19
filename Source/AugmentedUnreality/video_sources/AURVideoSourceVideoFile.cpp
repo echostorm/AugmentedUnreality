@@ -1,5 +1,5 @@
 /*
-Copyright 2016 Krzysztof Lis
+Copyright 2016-2017 Krzysztof Lis
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -20,29 +20,45 @@ limitations under the License.
 const float UAURVideoSourceVideoFile::MIN_FPS = 0.1;
 const float UAURVideoSourceVideoFile::MAX_FPS = 60.0;
 
+FString UAURVideoSourceVideoFile::GetIdentifier() const
+{
+	return "VideoFile";
+}
+
 FText UAURVideoSourceVideoFile::GetSourceName() const
 {
-	if(!SourceName.IsEmpty())
+	return NSLOCTEXT("AUR", "VideoSourceVideoFile", "File");
+}
+
+void UAURVideoSourceVideoFile::DiscoverConfigurations()
+{
+	Configurations.Empty();
+
+	const FString full_path = FPaths::GameDir() / VideoFile;
+
+	if (FPaths::FileExists(full_path))
 	{
-		return SourceName;
+		FAURVideoConfiguration cfg(this, FPaths::GetCleanFilename(full_path));
+		cfg.FilePath = full_path;
+		Configurations.Add(cfg);
 	}
 	else
 	{
-		return FText::FromString("File " + FPaths::GetCleanFilename(VideoFile));
+		UE_LOG(LogAUR, Warning, TEXT("UAURVideoSourceVideoFile: File %s does not exist"), *full_path)
 	}
 }
 
-bool UAURVideoSourceVideoFile::Connect()
+bool UAURVideoSourceVideoFile::Connect(FAURVideoConfiguration const& configuration)
 {
-	FString full_path = FPaths::GameDir() / VideoFile;
+	Super::Connect(configuration);
 
-	if (!FPaths::FileExists(full_path))
+	if (!FPaths::FileExists(configuration.FilePath))
 	{
-		UE_LOG(LogAUR, Error, TEXT("UAURVideoSourceVideoFile::Connect: File %s does not exist"), *full_path)
+		UE_LOG(LogAUR, Error, TEXT("UAURVideoSourceVideoFile::Connect: File %s does not exist"), *configuration.FilePath)
 		return false;
 	}
 
-	bool success = OpenVideoCapture(full_path);
+	bool success = OpenVideoCapture(configuration.FilePath);
 
 	Period = 1.0;
 	if (success)
@@ -50,25 +66,26 @@ bool UAURVideoSourceVideoFile::Connect()
 		// Determine time needed to wait
 		float fps = GetFrequency();
 
-		UE_LOG(LogAUR, Log, TEXT("UAURVideoSourceVideoFile::Connect: Opened video file %s, reported FPS = %lf"),
-			*full_path, fps)
+		// Now this returns -1...
+		FrameCount = FPlatformMath::RoundToInt(Capture.get(cv::CAP_PROP_FRAME_COUNT));
+
+		UE_LOG(LogAUR, Log, TEXT("UAURVideoSourceVideoFile::Connect: Opened video file %s, reported: FPS = %lf, frames = %d"),
+			*configuration.FilePath, fps, FrameCount)
 
 		fps = FMath::Clamp(fps, MIN_FPS, MAX_FPS);
 		Period = 1.0 / fps;
-
-		FrameCount = FPlatformMath::RoundToInt(Capture.get(cv::CAP_PROP_FRAME_COUNT));
 
 		LoadCalibration();
 	}
 	else
 	{
-		UE_LOG(LogAUR, Error, TEXT("UAURVideoSourceVideoFile::Connect: Failed to open video file %s"), *full_path)
+		UE_LOG(LogAUR, Error, TEXT("UAURVideoSourceVideoFile::Connect: Failed to open video file %s"), *configuration.FilePath)
 	}
 
 	return success;
 }
 
-bool UAURVideoSourceVideoFile::GetNextFrame(cv::Mat & frame)
+bool UAURVideoSourceVideoFile::GetNextFrame(cv::Mat_<cv::Vec3b>& frame)
 {
 	// Simulate camera delay by waiting
 	FPlatformProcess::Sleep(Period);
@@ -76,7 +93,13 @@ bool UAURVideoSourceVideoFile::GetNextFrame(cv::Mat & frame)
 	bool success = Capture.read(frame);
 
 	// Loop the video
-	if (Capture.get(cv::CAP_PROP_POS_FRAMES) >= FrameCount - 1)
+
+	// If we received a number of frames, then use it
+	if ((FrameCount > 0 && Capture.get(cv::CAP_PROP_POS_FRAMES) >= FrameCount - 1)
+		||
+	// but sometimes the frame count is -1 - in that case use the relative position
+		Capture.get(cv::CAP_PROP_POS_AVI_RATIO) > 0.97
+	)
 	{
 		Capture.set(cv::CAP_PROP_POS_FRAMES, 0);
 	}

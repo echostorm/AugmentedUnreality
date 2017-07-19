@@ -1,5 +1,5 @@
 /*
-Copyright 2016 Krzysztof Lis
+Copyright 2016-2017 Krzysztof Lis
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -30,7 +30,7 @@ void UAURVideoSourceCvCapture::Disconnect()
 	}
 }
 
-bool UAURVideoSourceCvCapture::GetNextFrame(cv::Mat & frame)
+bool UAURVideoSourceCvCapture::GetNextFrame(cv::Mat_<cv::Vec3b>& frame)
 {
 	return Capture.read(frame);
 }
@@ -50,12 +50,12 @@ float UAURVideoSourceCvCapture::GetFrequency() const
 
 bool UAURVideoSourceCvCapture::OpenVideoCapture(const FString argument)
 {
-#ifndef __ANDROID__
+#if !PLATFORM_ANDROID
 	try
 	{
 #endif
 		return Capture.open(TCHAR_TO_UTF8(*argument));
-#ifndef __ANDROID__
+#if !PLATFORM_ANDROID
 	}
 	catch (std::exception& exc)
 	{

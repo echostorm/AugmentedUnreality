@@ -1,5 +1,5 @@
 /*
-Copyright 2016 Krzysztof Lis
+Copyright 2016-2017 Krzysztof Lis
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -18,7 +18,6 @@ limitations under the License.
 #include "AURDriverOpenCV.h"
 
 UAURDriverOpenCV::UAURDriverOpenCV()
-	: DefaultVideoSourceIndex(1)
 {
 }
 
@@ -26,15 +25,9 @@ void UAURDriverOpenCV::Initialize(AActor* parent_actor)
 {
 	this->Tracker.SetSettings(this->TrackerSettings);
 
-	AvailableVideoSources.Add(nullptr);
-
-	for (auto const& vid_src_class : DefaultVideoSources)
-	{
-		UAURVideoSource* vid_src = NewObject<UAURVideoSource>(this, vid_src_class);
-		AvailableVideoSources.Add(vid_src);
-	}
-
 	//FAUROpenCV::SetGstreamerPluginEnv();
+
+	Tracker.SetBoardVisibility(DiagnosticLevel >= EAURDiagnosticInfoLevel::AURD_Basic);
 
 	Super::Initialize(parent_actor);
 }
@@ -45,8 +38,9 @@ void UAURDriverOpenCV::Tick()
 
 	if (bActive)
 	{
-		FScopeLock lock(&this->TrackerLock);
-		Tracker.PublishTransformUpdatesOnTick();
+		// lock moved to AURArucoTracker
+		//FScopeLock lock(&this->TrackerLock);
+		Tracker.PublishTransformUpdatesOnTick(this);
 	}
 }
 
@@ -56,56 +50,23 @@ UAURVideoSource * UAURDriverOpenCV::GetVideoSource()
 	return VideoSource;
 }
 
-void UAURDriverOpenCV::SetVideoSource(UAURVideoSource * NewVideoSource)
+void UAURDriverOpenCV::OpenVideoSource(FAURVideoConfiguration const& VideoConfiguration)
 {
-	FScopeLock lock(&VideoSourceLock);
-	NextVideoSource = NewVideoSource;
-}
+	Super::OpenVideoSource(VideoConfiguration);
 
-void UAURDriverOpenCV::SetVideoSourceByIndex(const int32 index)
-{
-	if (index < 0 || index >= AvailableVideoSources.Num())
 	{
-		UE_LOG(LogAUR, Error, TEXT("UAURDriverOpenCV::SetVideoSourceByIndex index outside of range: %d"), index)
-	}
-	else
-	{
-		SetVideoSource(AvailableVideoSources[index]);
-
-		// Save the index to open same source on next run
-		DefaultVideoSourceIndex = index;
-		SaveConfig();
+		FScopeLock lock(&VideoSourceLock);
+		NextVideoConfiguration = VideoConfiguration;
+		SwitchToNextVideoSource = true;
 	}
 }
 
-bool UAURDriverOpenCV::OpenDefaultVideoSource()
-{
-	if (DefaultVideoSourceIndex >= 0 && DefaultVideoSourceIndex < AvailableVideoSources.Num())
-	{
-		SetVideoSourceByIndex(DefaultVideoSourceIndex);
-		return true;
-	}
-	else
-	{
-		for (int32 idx = 0; idx < AvailableVideoSources.Num(); idx++)
-		{
-			if (AvailableVideoSources[idx])
-			{
-				SetVideoSourceByIndex(idx);
-				return true;
-			}
-		}
-	}
-
-	return false;
-}
-
-bool UAURDriverOpenCV::RegisterBoard(AAURMarkerBoardDefinitionBase * board_actor, bool use_as_viewpoint_origin)
+bool UAURDriverOpenCV::RegisterBoard(AAURFiducialPattern * board_actor, bool use_as_viewpoint_origin)
 {
 	return Tracker.RegisterBoard(board_actor, use_as_viewpoint_origin);
 }
 
-void UAURDriverOpenCV::UnregisterBoard(AAURMarkerBoardDefinitionBase * board_actor)
+void UAURDriverOpenCV::UnregisterBoard(AAURFiducialPattern * board_actor)
 {
 	Tracker.UnregisterBoard(board_actor);
 }
@@ -179,6 +140,11 @@ FVector2D UAURDriverOpenCV::GetFieldOfView() const
 	}
 }
 
+FTransform UAURDriverOpenCV::GetCurrentViewportTransform() const
+{
+	return Tracker.GetViewpointTransform();
+}
+
 bool UAURDriverOpenCV::IsConnected() const
 {
 	if (VideoSource)
@@ -228,6 +194,13 @@ void UAURDriverOpenCV::CancelCalibration()
 	NotifyCalibrationStatusChange();
 }
 
+void UAURDriverOpenCV::SetDiagnosticInfoLevel(EAURDiagnosticInfoLevel NewLevel)
+{
+	Super::SetDiagnosticInfoLevel(NewLevel);
+
+	Tracker.SetDiagnosticInfoLevel(NewLevel);
+}
+
 FString UAURDriverOpenCV::GetDiagnosticText() const
 {
 	return this->DiagnosticText;
@@ -236,7 +209,9 @@ FString UAURDriverOpenCV::GetDiagnosticText() const
 UAURDriverOpenCV::FWorkerRunnable::FWorkerRunnable(UAURDriverOpenCV * driver)
 	: Driver(driver)
 {
-	CapturedFrame = cv::Mat(1920, 1080, CV_8UC3, cv::Scalar(0, 0, 255));
+	//CapturedFrame = cv::Mat(1920, 1080, CV_8UC3, cv::Scalar(0, 0, 255));
+	CapturedFrame.create(1920, 1080);
+	CapturedFrame.setTo(cv::Scalar(0, 0, 255));
 }
 
 bool UAURDriverOpenCV::FWorkerRunnable::Init()
@@ -254,35 +229,45 @@ uint32 UAURDriverOpenCV::FWorkerRunnable::Run()
 
 	while (this->bContinue)
 	{
-		bool new_video_source = false;
+		// whether we switch to a new vid src in this iteration
+		bool new_video_source_now = false;
+		FAURVideoConfiguration video_config_to_open;
 
 		// Switch video source
 		{
 			FScopeLock lock(&Driver->VideoSourceLock);
 
-			if (current_video_source != Driver->NextVideoSource)
+			if (Driver->SwitchToNextVideoSource)
 			{
-				UE_LOG(LogAUR, Log, TEXT("AURDriverOpenCV: Switching video source"))
-
+				// Disconnect from previous video source
 				if (current_video_source)
 				{
 					current_video_source->Disconnect();
 				}
 
-				current_video_source = Driver->NextVideoSource;
+				video_config_to_open = Driver->NextVideoConfiguration; //save in local var in case it is modified before we connect to video source
+				UAURVideoSource* next_src_obj = video_config_to_open.VideoSourceObject;
+
+				const FString vid_src_name = next_src_obj ? next_src_obj->GetIdentifier() : "NULL";
+				UE_LOG(LogAUR, Log, TEXT("AURDriverOpenCV: Switching video source to [%s]"), *vid_src_name);
+
+				current_video_source = next_src_obj;
 				// need to be kept in UPROPERTY for GC
 				Driver->VideoSource = current_video_source;
 
-				new_video_source = true;
+				new_video_source_now = true;
+				Driver->SwitchToNextVideoSource = false;
 			}
 		}
-		
+
 		// activate new video source after switch
-		if (new_video_source)
+		// this is outside the previous block because opening connection can take time
+		// and we don't want to block VideoSourceLock
+		if (new_video_source_now)
 		{
 			if (current_video_source)
 			{
-				current_video_source->Connect();
+				current_video_source->Connect(video_config_to_open);
 			}
 
 			Driver->OnVideoSourceSwitch();
@@ -300,7 +285,7 @@ uint32 UAURDriverOpenCV::FWorkerRunnable::Run()
 
 			// compare the frame size to the size we expect from capture parameters
 			auto frame_size = CapturedFrame.size();
-			
+
 			if (frame_size.width != Driver->FrameResolution.X || frame_size.height != Driver->FrameResolution.Y)
 			{
 				FIntPoint new_camera_res(frame_size.width, frame_size.height);
@@ -311,7 +296,7 @@ uint32 UAURDriverOpenCV::FWorkerRunnable::Run()
 				Driver->OnCameraPropertiesChange(new_camera_res);
 			}
 			else
-			{	
+			{
 				if (Driver->IsCalibrationInProgress()) // calibration
 				{
 					if (Driver->WorldReference)
@@ -328,14 +313,15 @@ uint32 UAURDriverOpenCV::FWorkerRunnable::Run()
 					{
 						UE_LOG(LogAUR, Error, TEXT("AURDriverOpenCV: WorldReference is null, cannot measure time for calibration"))
 					}
-				} 
+				}
 				else if (this->Driver->bPerformOrientationTracking)
 				{
 					/**
 					* Tracking markers and relative position with respect to them
 					*/
 					{
-						FScopeLock lock(&Driver->TrackerLock);
+						// lock moved to AURArucoTracker
+						//FScopeLock lock(&Driver->TrackerLock);
 						Driver->Tracker.DetectMarkers(CapturedFrame);
 					}
 				}
@@ -373,7 +359,7 @@ uint32 UAURDriverOpenCV::FWorkerRunnable::Run()
 		{
 			current_video_source->Disconnect();
 		}
-		
+
 		Driver->VideoSource = nullptr;
 		Driver->NextVideoSource = nullptr;
 		Driver->OnVideoSourceSwitch();

@@ -1,5 +1,5 @@
 /*
-Copyright 2016 Krzysztof Lis
+Copyright 2016-2017 Krzysztof Lis
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -24,47 +24,35 @@ struct FOpenCVCameraProperties
 {
 	GENERATED_BODY()
 
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = CameraCalibration)
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = CameraCalibration)
 	FIntPoint Resolution;
 
-	/** Camera matrix in form:
+	/** Camera intrinsic matrix in form:
 		f_x,	0,		center_x;
 		0,		f_y,	center_y;
 		0,		0		1;
-	
+
 		During the calibration we will assume
 		that f_x == f_y,
 		center_x = res_x/2
 		center_y = res_y/2
 	*/
-	cv::Mat CameraMatrix;
+	cv::Mat_<double> CameraMatrix;
 
-	cv::Mat DistortionCoefficients;
+	cv::Mat_<double> DistortionCoefficients;
 
 	// Field of view, X is horizontal, Y is vertical,
 	// calculated from CameraMatrix and Resolution.
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = CameraCalibration)
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = CameraCalibration)
 	FVector2D FOV;
 
-	FOpenCVCameraProperties()
-		: Resolution(800, 600)
-	{
-		// Default camera matrix:
-		// f = 900
-		// res = 800x600
-		CameraMatrix.create(3, 3, CV_64FC1);
-		CameraMatrix.setTo(0.0);
-		double f = 900.0;
-		CameraMatrix.at<double>(0, 0) = f;
-		CameraMatrix.at<double>(1, 1) = f;
-		CameraMatrix.at<double>(0, 2) = 0.5 * double(Resolution.X);
-		CameraMatrix.at<double>(1, 2) = 0.5 * double(Resolution.Y);
+	FOpenCVCameraProperties();
 
-		DistortionCoefficients.create(5, 1, CV_64FC1);
-		DistortionCoefficients.setTo(0);
+	// Builds the camera matrix using resolution and focal length (in pixels)
+	void SetFromResolutionAndFocal(FIntPoint const& resolution, double focal_pixels);
 
-		DeriveFOV();
-	}
+	// Builds the camera matrix using resolution and horizontal FOV angle (degrees)
+	void SetFromResolutionAndFOV(FIntPoint const& resolution, double horizontal_fov_deg);
 
 	/**
 	 * Attempts to load calibration data from file in OpenCV format.
@@ -80,6 +68,9 @@ struct FOpenCVCameraProperties
 
 	/** Change the resolution, trying to preserve the FOV */
 	void SetResolution(FIntPoint const& new_resolution);
+
+	/** Change the horizontal FOV (in degrees), preserving the resolution */
+	void SetHorizontalFOV(double horizontal_fov_deg);
 
 	/** Calucalte FOV from CameraMatrix */
 	void DeriveFOV();
@@ -99,11 +90,11 @@ class FOpenCVCameraCalibrationProcess
 {
 public:
 	FOpenCVCameraCalibrationProcess();
-	
+
 	// Prepare for a new calibration, clear any the process if it is in progress.
 	void Reset();
 
-	// Try using a new frame. Time is given so that there is appropriate interval 
+	// Try using a new frame. Time is given so that there is appropriate interval
 	// between consecutive captured frames.
 	bool ProcessFrame(cv::Mat& frame, float time_now);
 
@@ -117,7 +108,7 @@ public:
 		return float(FramesCollected) / float(FramesNeeded);
 	}
 
-	FOpenCVCameraProperties const& GetCameraProperties() const 
+	FOpenCVCameraProperties const& GetCameraProperties() const
 	{
 		return CameraProperties;
 	}

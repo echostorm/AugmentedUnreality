@@ -1,5 +1,5 @@
 /*
-Copyright 2016 Krzysztof Lis
+Copyright 2016-2017 Krzysztof Lis
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -15,8 +15,10 @@ limitations under the License.
 */
 #pragma once
 
+#include "AUROpenCV.h"
 #include "AURMarkerComponentBase.generated.h"
 
+/*
 struct FMarkerDefinitionData {
 	int32 MarkerId;
 
@@ -30,7 +32,7 @@ struct FMarkerDefinitionData {
 			Corners[idx].Set(0, 0, 0);
 		}
 	}
-};
+};*/
 
 /**
  * Actor blueprint representing a spatial configuration
@@ -46,10 +48,7 @@ public:
 	static const float MARKER_TEXT_RELATIVE_SCALE;
 	static const std::vector<FVector> LOCAL_CORNERS;
 
-	UPROPERTY()
-	UTextRenderComponent* MarkerText;
-
-	/** 
+	/**
 		Unique id encoded into the pattern of the marker.
 		Each marker used should have different Id.
 	**/
@@ -78,11 +77,20 @@ public:
 
 	UAURMarkerComponentBase();
 
-	virtual void PostLoad() override;
+	//FMarkerDefinitionData GetDefinition() const;
+	void AppendToBoardDefinition(cv::Ptr<cv::aur::FiducialPatternArUco::Builder> & pattern_builder);
 
-	FMarkerDefinitionData GetDefinition() const;
-
+	/* UActorComponent */
 #if WITH_EDITOR
 	virtual void PostEditChangeProperty(FPropertyChangedEvent& property_change_event) override;
 #endif
+	/* end UActorComponent */
+
+protected:
+	UPROPERTY(Transient)
+	UTextRenderComponent* MarkerText;
+
+	/* UActorComponent */
+	virtual void OnRegister() override;
+	/* end UActorComponent */
 };

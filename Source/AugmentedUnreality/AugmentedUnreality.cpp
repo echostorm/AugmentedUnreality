@@ -1,5 +1,5 @@
 /*
-Copyright 2016 Krzysztof Lis
+Copyright 2016-2017 Krzysztof Lis
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -24,9 +24,7 @@ void FAugmentedUnrealityModule::StartupModule()
 	UE_LOG(LogAUR, Log, TEXT("AugmentedUnreality: module startup"))
 }
 
-
 void FAugmentedUnrealityModule::ShutdownModule()
 {
-	UE_LOG(LogAUR, Log, TEXT("AugmentedUnreality: module shutdown"))
+	UE_LOG(LogAUR, Log, TEXT("AugmentedUnreality: module shutdown"));
 }
-
